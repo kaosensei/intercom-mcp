@@ -1,10 +1,10 @@
-# Intercom Articles MCP Server
+# Intercom MCP Server
 
-A Model Context Protocol (MCP) server for reading and writing Intercom Help Center articles.
+Intercom MCP server for Help Center content management and CS workflow automation.
 
 ## Version
 
-**v0.5.0** - Added article search functionality with keyword matching and highlighting
+**v0.6.0** - Added CS workflow tools (reply conversation, add note, close conversation, update ticket)
 
 ## Features
 
@@ -21,12 +21,18 @@ A Model Context Protocol (MCP) server for reading and writing Intercom Help Cent
 - ✅ `update_collection` - Update collection info and translations
 - ✅ `delete_collection` - Delete a collection (permanent)
 
+### CS Workflow
+- ✅ `reply_conversation` - Reply to a conversation as an admin
+- ✅ `add_conversation_note` - Add an internal note to a conversation
+- ✅ `close_conversation` - Close a conversation
+- ✅ `update_ticket` - Update a ticket's state or attributes
+
 ## Installation
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/kaosensei/intercom-articles-mcp.git
-cd intercom-articles-mcp
+git clone https://github.com/kaosensei/intercom-mcp.git
+cd intercom-mcp
 ```
 
 2. Install dependencies:
@@ -45,16 +51,24 @@ npm run build
 
 1. Go to Intercom Settings → Developers → Developer Hub
 2. Create a new app or use existing one
-3. Get an Access Token with **Articles** read and write permissions
+3. Get an Access Token with **Articles** and **Conversations** read and write permissions
+
+### Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `INTERCOM_ACCESS_TOKEN` | ✅ Always | Your Intercom API access token |
+| `INTERCOM_ADMIN_ID` | ✅ For CS tools | Admin ID used for `reply_conversation` and `add_conversation_note` when `admin_id` parameter is not provided |
 
 ### Configure with Claude Code (Recommended)
 
 If you're using Claude Code CLI, you can easily add the MCP server:
 
 ```bash
-claude mcp add --transport stdio intercom-articles \
+claude mcp add --transport stdio intercom-mcp \
   --env INTERCOM_ACCESS_TOKEN=<your_token> \
-  -- node /ABSOLUTE/PATH/TO/intercom-articles-mcp/dist/index.js
+  --env INTERCOM_ADMIN_ID=<your_admin_id> \
+  -- node /ABSOLUTE/PATH/TO/intercom-mcp/dist/index.js
 ```
 
 Replace:
@@ -78,13 +92,14 @@ Add this configuration:
 ```json
 {
   "mcpServers": {
-    "intercom-articles": {
+    "intercom-mcp": {
       "command": "node",
       "args": [
-        "/ABSOLUTE/PATH/TO/intercom-articles-mcp/dist/index.js"
+        "/ABSOLUTE/PATH/TO/intercom-mcp/dist/index.js"
       ],
       "env": {
-        "INTERCOM_ACCESS_TOKEN": "your_intercom_access_token_here"
+        "INTERCOM_ACCESS_TOKEN": "your_intercom_access_token_here",
+        "INTERCOM_ADMIN_ID": "your_admin_id_here"
       }
     }
   }
@@ -92,8 +107,9 @@ Add this configuration:
 ```
 
 **Important**:
-- Replace `/ABSOLUTE/PATH/TO/intercom-articles-mcp` with your actual project path
+- Replace `/ABSOLUTE/PATH/TO/intercom-mcp` with your actual project path
 - Replace `your_intercom_access_token_here` with your actual token
+- Replace `your_admin_id_here` with your Intercom admin ID (required for CS tools)
 
 ### Restart Claude Desktop
 
@@ -503,7 +519,7 @@ npm install && npm run build
 ## Project Structure
 
 ```
-intercom-articles-mcp/
+intercom-mcp/
 ├── package.json           # Project configuration
 ├── tsconfig.json          # TypeScript configuration
 ├── src/
@@ -526,6 +542,10 @@ intercom-articles-mcp/
 - ✅ Delete Collection (v0.4.0)
 - ✅ Multilingual support for Collections (v0.4.0)
 - ✅ Search Articles with keyword matching and highlighting (v0.5.0)
+- ✅ Reply to conversations (v0.6.0)
+- ✅ Add internal notes to conversations (v0.6.0)
+- ✅ Close conversations (v0.6.0)
+- ✅ Update ticket state and attributes (v0.6.0)
 
 ### Planned
 - 🔜 Delete Article

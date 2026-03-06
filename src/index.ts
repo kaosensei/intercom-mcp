@@ -93,6 +93,7 @@ interface ListCollectionsResponse {
 
 // 從環境變數取得 token
 const INTERCOM_TOKEN = process.env.INTERCOM_ACCESS_TOKEN;
+const INTERCOM_ADMIN_ID = process.env.INTERCOM_ADMIN_ID;
 const INTERCOM_API_BASE = 'https://api.intercom.io';
 
 /**
@@ -136,8 +137,8 @@ async function callIntercomAPI(
  * 建立 MCP Server
  */
 const server = new Server({
-  name: 'intercom-articles-mcp',
-  version: '0.5.0'
+  name: 'intercom-mcp',
+  version: '0.6.0'
 }, {
   capabilities: {
     tools: {}
@@ -431,6 +432,83 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ['phrase']
         }
+      },
+      {
+        name: 'reply_conversation',
+        description: 'Reply to an Intercom conversation as an admin. Use this to send a message visible to the customer.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            conversation_id: {
+              type: 'string',
+              description: 'The conversation ID to reply to (required)'
+            },
+            body: {
+              type: 'string',
+              description: 'The reply message body (required). Supports HTML.'
+            },
+            admin_id: {
+              type: 'string',
+              description: 'Admin ID to reply as (optional, defaults to INTERCOM_ADMIN_ID env var)'
+            }
+          },
+          required: ['conversation_id', 'body']
+        }
+      },
+      {
+        name: 'add_conversation_note',
+        description: 'Add an internal note to an Intercom conversation. Notes are only visible to team members, not customers.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            conversation_id: {
+              type: 'string',
+              description: 'The conversation ID to add a note to (required)'
+            },
+            body: {
+              type: 'string',
+              description: 'The note content (required). Supports HTML.'
+            },
+            admin_id: {
+              type: 'string',
+              description: 'Admin ID adding the note (optional, defaults to INTERCOM_ADMIN_ID env var)'
+            }
+          },
+          required: ['conversation_id', 'body']
+        }
+      },
+      {
+        name: 'close_conversation',
+        description: 'Close an Intercom conversation.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            conversation_id: {
+              type: 'string',
+              description: 'The conversation ID to close (required)'
+            }
+          },
+          required: ['conversation_id']
+        }
+      },
+      {
+        name: 'update_ticket_state',
+        description: 'Update the state of an Intercom ticket.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            ticket_id: {
+              type: 'string',
+              description: 'The ticket ID to update (required)'
+            },
+            state: {
+              type: 'string',
+              enum: ['in_progress', 'waiting_on_customer', 'resolved'],
+              description: 'The new ticket state (required)'
+            }
+          },
+          required: ['ticket_id', 'state']
+        }
       }
     ]
   };
@@ -722,6 +800,107 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
+    if (name === 'reply_conversation') {
+      const { conversation_id, body, admin_id } = args as {
+        conversation_id: string;
+        body: string;
+        admin_id?: string;
+      };
+
+      if (!conversation_id || !body) {
+        throw new Error('conversation_id and body are required');
+      }
+
+      const resolvedAdminId = admin_id || INTERCOM_ADMIN_ID;
+      if (!resolvedAdminId) {
+        throw new Error('admin_id is required. Set INTERCOM_ADMIN_ID env var or pass admin_id parameter.');
+      }
+
+      const result = await callIntercomAPI(`/conversations/${conversation_id}/reply`, 'POST', {
+        message_type: 'comment',
+        type: 'admin',
+        admin_id: resolvedAdminId,
+        body
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(result, null, 2)
+        }]
+      };
+    }
+
+    if (name === 'add_conversation_note') {
+      const { conversation_id, body, admin_id } = args as {
+        conversation_id: string;
+        body: string;
+        admin_id?: string;
+      };
+
+      if (!conversation_id || !body) {
+        throw new Error('conversation_id and body are required');
+      }
+
+      const resolvedNoteAdminId = admin_id || INTERCOM_ADMIN_ID;
+      if (!resolvedNoteAdminId) {
+        throw new Error('admin_id is required. Set INTERCOM_ADMIN_ID env var or pass admin_id parameter.');
+      }
+
+      const result = await callIntercomAPI(`/conversations/${conversation_id}/reply`, 'POST', {
+        message_type: 'note',
+        type: 'admin',
+        admin_id: resolvedNoteAdminId,
+        body
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(result, null, 2)
+        }]
+      };
+    }
+
+    if (name === 'close_conversation') {
+      const { conversation_id } = args as { conversation_id: string };
+
+      if (!conversation_id) {
+        throw new Error('conversation_id is required');
+      }
+
+      const result = await callIntercomAPI(`/conversations/${conversation_id}`, 'PUT', {
+        state: 'closed'
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(result, null, 2)
+        }]
+      };
+    }
+
+    if (name === 'update_ticket_state') {
+      const { ticket_id, state } = args as {
+        ticket_id: string;
+        state: 'in_progress' | 'waiting_on_customer' | 'resolved';
+      };
+
+      if (!ticket_id || !state) {
+        throw new Error('ticket_id and state are required');
+      }
+
+      const result = await callIntercomAPI(`/tickets/${ticket_id}`, 'PUT', { state });
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(result, null, 2)
+        }]
+      };
+    }
+
     throw new Error(`Unknown tool: ${name}`);
 
   } catch (error) {
@@ -751,11 +930,12 @@ async function main() {
   await server.connect(transport);
 
   // 使用 stderr 輸出（stdio 協定使用 stdout）
-  console.error('Intercom Articles MCP Server v0.5.0');
+  console.error('Intercom MCP Server v0.6.0');
   console.error('Running on stdio transport');
   console.error('Tools available:');
   console.error('  Articles: get_article, list_articles, create_article, update_article, search_articles');
   console.error('  Collections: list_collections, get_collection, update_collection, delete_collection');
+  console.error('  CS Tools: reply_conversation, add_conversation_note, close_conversation, update_ticket_state');
 }
 
 // 啟動伺服器
