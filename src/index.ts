@@ -869,8 +869,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error('conversation_id is required');
       }
 
-      const result = await callIntercomAPI(`/conversations/${conversation_id}`, 'PUT', {
-        state: 'closed'
+      const resolvedAdminId = INTERCOM_ADMIN_ID;
+      if (!resolvedAdminId) {
+        throw new Error('admin_id is required. Set INTERCOM_ADMIN_ID env var.');
+      }
+
+      const result = await callIntercomAPI(`/conversations/${conversation_id}/reply`, 'POST', {
+        message_type: 'close',
+        type: 'admin',
+        admin_id: resolvedAdminId
       });
 
       return {

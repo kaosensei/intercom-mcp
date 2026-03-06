@@ -1,6 +1,6 @@
 {
   "name": "intercom-mcp",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Intercom MCP server for Help Center content management and CS workflow automation.",
   "type": "module",
   "main": "dist/index.js",
