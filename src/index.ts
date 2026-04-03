@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 
+import { createRequire } from 'node:module';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+
+const require = createRequire(import.meta.url);
+const { version: VERSION } = require('../package.json');
 
 // Intercom Article 型別
 interface IntercomArticle {
@@ -80,6 +84,18 @@ interface SearchArticlesResponse {
   };
 }
 
+// Intercom Admin 型別
+interface IntercomAdmin {
+  type: string;
+  id: string;
+  name: string;
+  email: string;
+  away_mode_enabled?: boolean;
+  away_mode_reassign?: boolean;
+  has_inbox_seat?: boolean;
+  team_ids?: number[];
+}
+
 interface ListCollectionsResponse {
   type: 'list';
   data: IntercomCollection[];
@@ -138,7 +154,7 @@ async function callIntercomAPI(
  */
 const server = new Server({
   name: 'intercom-mcp',
-  version: '0.6.0'
+  version: VERSION
 }, {
   capabilities: {
     tools: {}
@@ -200,7 +216,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             author_id: {
               type: 'number',
-              description: 'Author ID - must be a valid Intercom team member ID (required)'
+              description: 'Author ID - must be a valid Intercom admin ID (required). Use list_admins to find valid IDs by name.'
             },
             description: {
               type: 'string',
@@ -284,7 +300,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             author_id: {
               type: 'number',
-              description: 'Updated author ID (optional)'
+              description: 'Updated author ID (optional). Use list_admins to find valid IDs by name.'
             },
             translated_content: {
               type: 'object',
@@ -311,6 +327,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   }
                 }
               }
+            }
+          },
+          required: ['id']
+        }
+      },
+      {
+        name: 'delete_article',
+        description: 'Delete an Intercom Help Center article. WARNING: This action cannot be undone. The article will be permanently removed.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            id: {
+              type: 'string',
+              description: 'Article ID to delete (required)'
             }
           },
           required: ['id']
@@ -347,6 +377,45 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             }
           },
           required: ['id']
+        }
+      },
+      {
+        name: 'create_collection',
+        description: 'Create a new Intercom Help Center collection. Collections are top-level categories that contain sections and articles.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: {
+              type: 'string',
+              description: 'Collection name (required)'
+            },
+            description: {
+              type: 'string',
+              description: 'Collection description (optional)'
+            },
+            parent_id: {
+              type: 'string',
+              description: 'Parent collection ID for nesting (optional, null for top-level)'
+            },
+            translated_content: {
+              type: 'object',
+              description: 'Multilingual content. Key is locale code (e.g., "zh-TW"), value is translation object',
+              additionalProperties: {
+                type: 'object',
+                properties: {
+                  name: {
+                    type: 'string',
+                    description: 'Translated collection name'
+                  },
+                  description: {
+                    type: 'string',
+                    description: 'Translated collection description'
+                  }
+                }
+              }
+            }
+          },
+          required: ['name']
         }
       },
       {
@@ -509,6 +578,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ['ticket_id', 'state']
         }
+      },
+      {
+        name: 'list_admins',
+        description: 'List all Intercom workspace admins/team members. Returns IDs, names, and emails. Useful for discovering valid author_id or admin_id values.',
+        inputSchema: {
+          type: 'object',
+          properties: {}
+        }
       }
     ]
   };
@@ -656,6 +733,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
+    if (name === 'delete_article') {
+      const { id } = args as { id: string };
+
+      // 驗證必填欄位
+      if (!id) {
+        throw new Error('Article ID is required');
+      }
+
+      const result = await callIntercomAPI(`/articles/${id}`, 'DELETE');
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            success: true,
+            message: `Article ${id} has been deleted successfully`,
+            ...result
+          }, null, 2)
+        }]
+      };
+    }
+
     if (name === 'list_collections') {
       const { page = 1, per_page = 50 } = args as {
         page?: number;
@@ -686,6 +785,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       const collection = await callIntercomAPI(`/help_center/collections/${id}`);
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(collection, null, 2)
+        }]
+      };
+    }
+
+    if (name === 'create_collection') {
+      const { name: collectionName, description, parent_id, translated_content } = args as {
+        name: string;
+        description?: string;
+        parent_id?: string;
+        translated_content?: {
+          [locale: string]: {
+            name?: string;
+            description?: string;
+          }
+        }
+      };
+
+      // 驗證必填欄位
+      if (!collectionName) {
+        throw new Error('Collection name is required');
+      }
+
+      // 建構 request payload
+      const payload: any = {
+        name: collectionName
+      };
+
+      if (description) payload.description = description;
+      if (parent_id) payload.parent_id = parent_id;
+      if (translated_content) payload.translated_content = translated_content;
+
+      const collection = await callIntercomAPI('/help_center/collections', 'POST', payload);
 
       return {
         content: [{
@@ -908,6 +1044,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
+    if (name === 'list_admins') {
+      const data = await callIntercomAPI('/admins');
+
+      // 簡化回應，只回傳最實用的欄位
+      const admins = (data.admins || []).map((admin: IntercomAdmin) => ({
+        id: admin.id,
+        name: admin.name,
+        email: admin.email,
+        has_inbox_seat: admin.has_inbox_seat,
+        away_mode_enabled: admin.away_mode_enabled,
+        team_ids: admin.team_ids
+      }));
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            type: 'admin.list',
+            admins
+          }, null, 2)
+        }]
+      };
+    }
+
     throw new Error(`Unknown tool: ${name}`);
 
   } catch (error) {
@@ -937,12 +1097,13 @@ async function main() {
   await server.connect(transport);
 
   // 使用 stderr 輸出（stdio 協定使用 stdout）
-  console.error('Intercom MCP Server v0.6.0');
+  console.error(`Intercom MCP Server v${VERSION}`);
   console.error('Running on stdio transport');
   console.error('Tools available:');
-  console.error('  Articles: get_article, list_articles, create_article, update_article, search_articles');
-  console.error('  Collections: list_collections, get_collection, update_collection, delete_collection');
+  console.error('  Articles: get_article, list_articles, create_article, update_article, delete_article, search_articles');
+  console.error('  Collections: list_collections, get_collection, create_collection, update_collection, delete_collection');
   console.error('  CS Tools: reply_conversation, add_conversation_note, close_conversation, update_ticket_state');
+  console.error('  Admin: list_admins');
 }
 
 // 啟動伺服器
