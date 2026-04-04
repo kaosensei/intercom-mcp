@@ -64,11 +64,6 @@ interface SearchArticlesResponse {
       translated_content?: any;
       statistics?: any;
     }>;
-    highlights?: Array<{
-      title?: string[];
-      body?: string[];
-      description?: string[];
-    }>;
   };
   pages?: {
     type: string;
@@ -410,13 +405,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'search_articles',
-        description: 'Search for Intercom Help Center articles using keywords. Returns summary fields (id, title, description, state, url) for each match. Use get_article to fetch the full content of a specific article.',
+        description: 'Search for Intercom Help Center articles using keywords. Returns summary fields (id, title, description, state, url, author_id, created_at, updated_at, parent_id, parent_type) for each match. Use get_article to fetch the full content of a specific article.',
         inputSchema: {
           type: 'object',
           properties: {
             phrase: {
               type: 'string',
-              description: 'Search phrase/keywords to find in articles (required)'
+              description: 'Search phrase/keywords to find in articles (optional)'
             },
             state: {
               type: 'string',
@@ -426,13 +421,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             help_center_id: {
               type: 'string',
               description: 'Filter by specific Help Center ID (optional)'
-            },
-            highlight: {
-              type: 'boolean',
-              description: 'Return highlighted matching content snippets (optional, default: false)'
             }
           },
-          required: ['phrase']
+          required: []
         }
       },
       {
@@ -762,21 +753,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === 'search_articles') {
-      const { phrase, state, help_center_id, highlight } = args as {
-        phrase: string;
+      const { phrase, state, help_center_id } = args as {
+        phrase?: string;
         state?: 'published' | 'draft' | 'all';
         help_center_id?: string;
-        highlight?: boolean;
       };
-
-      // 驗證必填欄位
-      if (!phrase) {
-        throw new Error('Search phrase is required');
-      }
 
       // 建構查詢參數
       const queryParams = new URLSearchParams();
-      queryParams.append('phrase', phrase);
+      if (phrase) {
+        queryParams.append('phrase', phrase);
+      }
 
       if (state) {
         queryParams.append('state', state);
@@ -784,10 +771,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       if (help_center_id) {
         queryParams.append('help_center_id', help_center_id);
-      }
-
-      if (highlight !== undefined) {
-        queryParams.append('highlight', String(highlight));
       }
 
       const data: SearchArticlesResponse = await callIntercomAPI(
