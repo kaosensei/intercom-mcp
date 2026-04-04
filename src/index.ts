@@ -1,12 +1,10 @@
 #!/usr/bin/env node
 
-import { createRequire } from 'node:module';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const require = createRequire(import.meta.url);
-const { version: VERSION } = require('../package.json');
+const VERSION = '0.7.0';
 
 // Intercom Article 型別
 interface IntercomArticle {
@@ -746,11 +744,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return {
         content: [{
           type: 'text',
-          text: JSON.stringify({
-            success: true,
-            message: `Article ${id} has been deleted successfully`,
-            ...result
-          }, null, 2)
+          text: JSON.stringify(result, null, 2)
         }]
       };
     }
