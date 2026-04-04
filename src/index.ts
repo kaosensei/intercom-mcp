@@ -49,27 +49,24 @@ interface ListArticlesResponse {
 interface SearchArticlesResponse {
   type: 'list';
   total_count: number;
-  data: Array<{
-    id: string;
-    title: string;
-    description?: string;
-    body?: string;
-    author_id: number;
-    state: 'draft' | 'published';
-    created_at: number;
-    updated_at: number;
-    url?: string;
-    parent_id?: string;
-    parent_type?: string;
-    default_locale?: string;
-    translated_content?: any;
-    statistics?: any;
-    highlights?: {
-      title?: string[];
-      body?: string[];
-      description?: string[];
-    };
-  }>;
+  data: {
+    articles: Array<{
+      id: string;
+      title: string;
+      description?: string;
+      body?: string;
+      author_id: number;
+      state: 'draft' | 'published';
+      created_at: number;
+      updated_at: number;
+      url?: string;
+      parent_id?: string;
+      parent_type?: string;
+      default_locale?: string;
+      translated_content?: any;
+      statistics?: any;
+    }>;
+  };
   pages?: {
     type: string;
     page?: number;
@@ -475,13 +472,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'search_articles',
-        description: 'Search for Intercom Help Center articles using keywords. Returns matching articles with optional highlighted content showing where matches were found.',
+        description: 'Search for Intercom Help Center articles using keywords. Returns summary fields (id, title, description, state, url, author_id, created_at, updated_at, parent_id, parent_type) for each match. Use get_article to fetch the full content of a specific article.',
         inputSchema: {
           type: 'object',
           properties: {
             phrase: {
               type: 'string',
-              description: 'Search phrase/keywords to find in articles (required)'
+              description: 'Search phrase/keywords to find in articles (optional)'
             },
             state: {
               type: 'string',
@@ -491,13 +488,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             help_center_id: {
               type: 'string',
               description: 'Filter by specific Help Center ID (optional)'
-            },
-            highlight: {
-              type: 'boolean',
-              description: 'Return highlighted matching content snippets (optional, default: false)'
             }
           },
-          required: ['phrase']
+          required: []
         }
       },
       {
@@ -890,21 +883,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === 'search_articles') {
-      const { phrase, state, help_center_id, highlight } = args as {
-        phrase: string;
+      const { phrase, state, help_center_id } = args as {
+        phrase?: string;
         state?: 'published' | 'draft' | 'all';
         help_center_id?: string;
-        highlight?: boolean;
       };
-
-      // 驗證必填欄位
-      if (!phrase) {
-        throw new Error('Search phrase is required');
-      }
 
       // 建構查詢參數
       const queryParams = new URLSearchParams();
-      queryParams.append('phrase', phrase);
+      if (phrase) {
+        queryParams.append('phrase', phrase);
+      }
 
       if (state) {
         queryParams.append('state', state);
@@ -914,18 +903,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         queryParams.append('help_center_id', help_center_id);
       }
 
-      if (highlight !== undefined) {
-        queryParams.append('highlight', String(highlight));
-      }
-
       const data: SearchArticlesResponse = await callIntercomAPI(
         `/articles/search?${queryParams.toString()}`
       );
 
+      const summary = {
+        total_count: data.total_count,
+        articles: (data.data.articles ?? []).map(article => ({
+          id: article.id,
+          title: article.title,
+          description: article.description,
+          state: article.state,
+          url: article.url,
+          author_id: article.author_id,
+          created_at: article.created_at,
+          updated_at: article.updated_at,
+          parent_id: article.parent_id,
+          parent_type: article.parent_type,
+        })),
+      };
+
       return {
         content: [{
           type: 'text',
-          text: JSON.stringify(data, null, 2)
+          text: JSON.stringify(summary, null, 2)
         }]
       };
     }
