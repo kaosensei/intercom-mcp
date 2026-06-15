@@ -4,7 +4,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.8.0';
+const VERSION = '0.8.1';
 
 // Intercom Article 型別
 interface IntercomArticle {
@@ -249,6 +249,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             query: {
+              type: 'object',
               description: 'Intercom search query object, e.g. {"operator":"AND","value":[{"field":"state","operator":"=","value":"open"}]}. Add {"field":"admin_assignee_id","operator":"=","value":<id>} to filter by assignee, or {"field":"source.author.email","operator":"=","value":"<email>"} by contact email.'
             },
             per_page: {
@@ -1055,10 +1056,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
       if (!query) throw new Error('query is required');
 
+      // MCP clients may serialize the query object as a JSON string — normalize to an object
+      // (Intercom's /conversations/search rejects a string with "Ensure query is a JSON object").
+      let q: any = query;
+      if (typeof q === 'string') {
+        try {
+          q = JSON.parse(q);
+        } catch {
+          throw new Error('query must be an Intercom query object (or its JSON string)');
+        }
+      }
+
       const pagination: any = { per_page: Math.min(50, Math.max(1, Math.floor(per_page))) };
       if (starting_after) pagination.starting_after = starting_after;
 
-      const result = await callIntercomAPI('/conversations/search', 'POST', { query, pagination });
+      const result = await callIntercomAPI('/conversations/search', 'POST', { query: q, pagination });
 
       return {
         content: [{

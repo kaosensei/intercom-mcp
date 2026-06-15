@@ -4,6 +4,8 @@ Intercom MCP server for Help Center content management and CS workflow automatio
 
 ## Version
 
+**v0.8.1** - Fix: `search_conversations` accepts the `query` even when the MCP client serializes the object as a JSON string (Intercom rejected the stringified form)
+
 **v0.8.0** - Added `search_conversations` & `get_conversation`; slimmed all action-tool responses (reply/close/note/article/ticket) to return only confirmation fields instead of the full Intercom object — prevents flooding the MCP client's context window
 
 **v0.7.0** - Added delete_article, create_collection, list_admins; optimized search_articles response
