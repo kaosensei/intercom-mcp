@@ -4,7 +4,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.8.1';
+const VERSION = '0.8.2';
 
 // Intercom Article 型別
 interface IntercomArticle {
@@ -184,7 +184,20 @@ function simplifyConversationListItem(conv: any) {
   };
 }
 
-// get_conversation——保留對話 parts，濾掉系統事件噪音
+// 只保留有值的 ticket custom attributes（每個 value 是 {value,type}；空欄位濾掉）
+function simplifyTicketAttributes(ticket: any) {
+  const attrs = ticket?.custom_attributes;
+  if (!attrs || typeof attrs !== 'object') return undefined;
+  const kept: any = {};
+  for (const [k, v] of Object.entries(attrs)) {
+    const val = (v as any)?.value;
+    if (val !== null && val !== undefined && val !== '') kept[k] = val;
+  }
+  return Object.keys(kept).length ? kept : undefined;
+}
+
+// get_conversation——濾掉系統事件 parts，但保留 cs 分類所需的頂層欄位
+// （source.delivered_as 判斷真實提問者、ticket form 真實需求、contacts、每則是否點選 quick reply）
 function simplifyConversationFull(data: any) {
   const allParts: any[] = data?.conversation_parts?.conversation_parts ?? [];
   const parts = allParts
@@ -194,8 +207,11 @@ function simplifyConversationFull(data: any) {
       part_type: p.part_type,
       body: p.body,
       author: simplifyAuthor(p.author),
+      // 區分「自行打字」vs「點 quick reply 選項」——cs 分類 🔵🔴 的關鍵
+      from_quick_reply: !!(p.metadata && p.metadata.quick_reply_option_uuid),
       created_at: p.created_at
     }));
+  const s = data?.source;
   return {
     id: data?.id,
     state: data?.state,
@@ -204,7 +220,17 @@ function simplifyConversationFull(data: any) {
     created_at: data?.created_at,
     updated_at: data?.updated_at,
     waiting_since: data?.waiting_since,
-    contact: simplifyAuthor(data?.source?.author),
+    source: s ? {
+      type: s.type,
+      delivered_as: s.delivered_as,
+      subject: s.subject,
+      body: s.body,
+      author: simplifyAuthor(s.author)
+    } : undefined,
+    ticket_attributes: simplifyTicketAttributes(data?.ticket),
+    contacts: (data?.contacts?.contacts ?? []).map((c: any) => ({
+      type: c.type, id: c.id, external_id: c.external_id, email: c.email, name: c.name
+    })),
     total_parts: allParts.length,
     included_parts: parts.length,
     parts
@@ -267,7 +293,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'get_conversation',
-        description: 'Get a single Intercom conversation by ID with message history. Returns SLIM content: only meaningful parts (comment/note/quick_reply) with system events filtered out, plus total_parts/included_parts counts.',
+        description: 'Get a single Intercom conversation by ID. SLIM: keeps triage essentials (source incl. delivered_as, ticket_attributes from ticket forms, contacts) and only meaningful parts (comment/note/quick_reply, each flagged with from_quick_reply) — system events filtered out, with total_parts/included_parts counts.',
         inputSchema: {
           type: 'object',
           properties: {
