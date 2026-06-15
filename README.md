@@ -548,9 +548,53 @@ List all workspace admins. Useful for finding valid `author_id` values when crea
 - `email`: Email address
 - `has_inbox_seat`: Whether the admin has an inbox seat
 
+### `search_conversations`
+
+Search conversations with an Intercom query object. Returns a **slim** list (no conversation parts) — call `get_conversation` for full content.
+
+**Parameters:**
+- `query` (object, required): Intercom search query object, e.g. `{"operator":"AND","value":[{"field":"state","operator":"=","value":"open"}]}`. Add `{"field":"admin_assignee_id","operator":"=","value":<id>}` to filter by assignee, or `source.author.email` by contact. Also accepts the object serialized as a JSON string.
+- `per_page` (number, optional): Results per page (default: 20, max: 50)
+- `starting_after` (string, optional): Pagination cursor from a previous response's `next`
+
+**Example (all open conversations):**
+```json
+{
+  "query": {"operator":"AND","value":[{"field":"state","operator":"=","value":"open"}]},
+  "per_page": 50
+}
+```
+
+**Response includes:**
+- `total_count`: Total matching conversations
+- `next`: Pagination cursor (present if more pages)
+- `conversations`: Array of slim items (id, state, open, title, subject, contact, admin_assignee_id, timestamps) — no parts
+
+### `get_conversation`
+
+Get a single conversation with message history, **slimmed** for triage: system-event parts filtered out, essentials kept.
+
+**Parameters:**
+- `id` (string, required): Conversation ID
+
+**Example:**
+```json
+{
+  "id": "12345678"
+}
+```
+
+**Response includes:**
+- Top level: `id`, `state`, `open`, `title`, timestamps, `waiting_since`
+- `source`: incl. `delivered_as` (identifies the real asker), `subject`, `body`, `author`
+- `ticket_attributes`: ticket-form custom attributes with non-empty values (the real request often lives here)
+- `contacts`: contact references
+- `total_parts` / `included_parts`: counts before / after filtering
+- `parts`: only `comment` / `note` / `quick_reply`, each `{ part_type, body, author, from_quick_reply, created_at }` (`from_quick_reply` distinguishes a typed reply from a tapped quick-reply option)
+
 ### `reply_conversation`
 
-Reply to a conversation as an admin. The reply is visible to the customer.
+Reply to a conversation as an admin. The reply is visible to the customer. Returns a slim confirmation object (`id`, `state`, `last_part_id`, timestamps).
 
 **Parameters:**
 - `conversation_id` (string, required): The conversation ID to reply to
@@ -636,7 +680,7 @@ npm run watch
 ### API errors
 
 1. Verify your Access Token is correct
-2. Ensure token has Articles read permissions
+2. Ensure token has Articles and Conversations read/write permissions
 3. Check Intercom API status
 
 ### Build errors
@@ -681,6 +725,9 @@ intercom-mcp/
 - ✅ Create Collection (v0.7.0)
 - ✅ List Admins (v0.7.0)
 - ✅ Optimized search_articles response (v0.7.0)
+- ✅ Search conversations — slim list (v0.8.0)
+- ✅ Get conversation — slim, triage-aware (system events filtered, `from_quick_reply` flag) (v0.8.0)
+- ✅ Slim action-tool responses to protect client context (v0.8.0)
 
 ### Planned
 - 🔜 Batch operations
