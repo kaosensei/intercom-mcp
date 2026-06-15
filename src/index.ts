@@ -4,7 +4,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 
 // Intercom Article 型別
 interface IntercomArticle {
@@ -144,6 +144,86 @@ async function callIntercomAPI(
   return response.json();
 }
 
+// ---- 回傳精簡 helpers：避免把整個 Intercom 物件灌進 tool result ----
+
+// 對話內容只保留這些 part_type，其餘為系統事件噪音
+// （assignment / open / close / language_detection_details / fin_* / operator_workflow_event / user_became_idle 等）
+const MEANINGFUL_PART_TYPES = new Set(['comment', 'note', 'quick_reply']);
+
+function simplifyAuthor(author: any) {
+  if (!author) return undefined;
+  return { type: author.type, id: author.id, name: author.name, email: author.email };
+}
+
+// 寫操作（reply / close / note / ticket）成功確認用——不含對話內容
+function simplifyWriteResult(data: any) {
+  const parts = data?.conversation_parts?.conversation_parts;
+  return {
+    id: data?.id,
+    state: data?.state,
+    open: data?.open,
+    last_part_id: Array.isArray(parts) && parts.length ? parts[parts.length - 1].id : undefined,
+    created_at: data?.created_at,
+    updated_at: data?.updated_at
+  };
+}
+
+// search_conversations 每筆列表項——不含 parts
+function simplifyConversationListItem(conv: any) {
+  return {
+    id: conv?.id,
+    state: conv?.state,
+    open: conv?.open,
+    title: conv?.title,
+    subject: conv?.source?.subject,
+    waiting_since: conv?.waiting_since,
+    admin_assignee_id: conv?.admin_assignee_id,
+    created_at: conv?.created_at,
+    updated_at: conv?.updated_at,
+    contact: simplifyAuthor(conv?.source?.author)
+  };
+}
+
+// get_conversation——保留對話 parts，濾掉系統事件噪音
+function simplifyConversationFull(data: any) {
+  const allParts: any[] = data?.conversation_parts?.conversation_parts ?? [];
+  const parts = allParts
+    .filter((p: any) => MEANINGFUL_PART_TYPES.has(p?.part_type))
+    .map((p: any) => ({
+      id: p.id,
+      part_type: p.part_type,
+      body: p.body,
+      author: simplifyAuthor(p.author),
+      created_at: p.created_at
+    }));
+  return {
+    id: data?.id,
+    state: data?.state,
+    open: data?.open,
+    title: data?.title,
+    created_at: data?.created_at,
+    updated_at: data?.updated_at,
+    waiting_since: data?.waiting_since,
+    contact: simplifyAuthor(data?.source?.author),
+    total_parts: allParts.length,
+    included_parts: parts.length,
+    parts
+  };
+}
+
+// create_article / update_article 用
+function simplifyArticleResult(a: any) {
+  return {
+    id: a?.id,
+    title: a?.title,
+    state: a?.state,
+    url: a?.url,
+    parent_id: a?.parent_id,
+    parent_type: a?.parent_type,
+    updated_at: a?.updated_at
+  };
+}
+
 /**
  * 建立 MCP Server
  */
@@ -162,6 +242,42 @@ const server = new Server({
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
+      {
+        name: 'search_conversations',
+        description: 'Search Intercom conversations. Returns a SLIM list (id, state, contact, timestamps) with NO conversation parts — call get_conversation for full content. Pass a raw Intercom query object.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: {
+              description: 'Intercom search query object, e.g. {"operator":"AND","value":[{"field":"state","operator":"=","value":"open"}]}. Add {"field":"admin_assignee_id","operator":"=","value":<id>} to filter by assignee, or {"field":"source.author.email","operator":"=","value":"<email>"} by contact email.'
+            },
+            per_page: {
+              type: 'number',
+              description: 'Results per page (default 20, max 50)',
+              default: 20
+            },
+            starting_after: {
+              type: 'string',
+              description: 'Pagination cursor from a previous response\'s "next" field'
+            }
+          },
+          required: ['query']
+        }
+      },
+      {
+        name: 'get_conversation',
+        description: 'Get a single Intercom conversation by ID with message history. Returns SLIM content: only meaningful parts (comment/note/quick_reply) with system events filtered out, plus total_parts/included_parts counts.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            id: {
+              type: 'string',
+              description: 'The conversation ID (required)'
+            }
+          },
+          required: ['id']
+        }
+      },
       {
         name: 'get_article',
         description: 'Get a single Intercom article by ID. Returns full article details including title, body, author, and state.',
@@ -671,7 +787,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return {
         content: [{
           type: 'text',
-          text: JSON.stringify(article, null, 2)
+          text: JSON.stringify(simplifyArticleResult(article), null, 2)
         }]
       };
     }
@@ -719,7 +835,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return {
         content: [{
           type: 'text',
-          text: JSON.stringify(article, null, 2)
+          text: JSON.stringify(simplifyArticleResult(article), null, 2)
         }]
       };
     }
@@ -931,6 +1047,45 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
+    if (name === 'search_conversations') {
+      const { query, per_page = 20, starting_after } = args as {
+        query: any;
+        per_page?: number;
+        starting_after?: string;
+      };
+      if (!query) throw new Error('query is required');
+
+      const pagination: any = { per_page: Math.min(50, Math.max(1, Math.floor(per_page))) };
+      if (starting_after) pagination.starting_after = starting_after;
+
+      const result = await callIntercomAPI('/conversations/search', 'POST', { query, pagination });
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            total_count: result.total_count,
+            next: result.pages?.next?.starting_after,
+            conversations: (result.conversations ?? []).map(simplifyConversationListItem)
+          }, null, 2)
+        }]
+      };
+    }
+
+    if (name === 'get_conversation') {
+      const { id } = args as { id: string };
+      if (!id) throw new Error('Conversation ID is required');
+
+      const result = await callIntercomAPI(`/conversations/${id}?display_as=plaintext`);
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(simplifyConversationFull(result), null, 2)
+        }]
+      };
+    }
+
     if (name === 'reply_conversation') {
       const { conversation_id, body, admin_id } = args as {
         conversation_id: string;
@@ -957,7 +1112,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return {
         content: [{
           type: 'text',
-          text: JSON.stringify(result, null, 2)
+          text: JSON.stringify(simplifyWriteResult(result), null, 2)
         }]
       };
     }
@@ -988,7 +1143,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return {
         content: [{
           type: 'text',
-          text: JSON.stringify(result, null, 2)
+          text: JSON.stringify(simplifyWriteResult(result), null, 2)
         }]
       };
     }
@@ -1014,7 +1169,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return {
         content: [{
           type: 'text',
-          text: JSON.stringify(result, null, 2)
+          text: JSON.stringify(simplifyWriteResult(result), null, 2)
         }]
       };
     }
@@ -1034,7 +1189,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return {
         content: [{
           type: 'text',
-          text: JSON.stringify(result, null, 2)
+          text: JSON.stringify(simplifyWriteResult(result), null, 2)
         }]
       };
     }
@@ -1097,6 +1252,7 @@ async function main() {
   console.error('Tools available:');
   console.error('  Articles: get_article, list_articles, create_article, update_article, delete_article, search_articles');
   console.error('  Collections: list_collections, get_collection, create_collection, update_collection, delete_collection');
+  console.error('  Conversations: search_conversations, get_conversation');
   console.error('  CS Tools: reply_conversation, add_conversation_note, close_conversation, update_ticket_state');
   console.error('  Admin: list_admins');
 }

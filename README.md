@@ -4,6 +4,8 @@ Intercom MCP server for Help Center content management and CS workflow automatio
 
 ## Version
 
+**v0.8.0** - Added `search_conversations` & `get_conversation`; slimmed all action-tool responses (reply/close/note/article/ticket) to return only confirmation fields instead of the full Intercom object — prevents flooding the MCP client's context window
+
 **v0.7.0** - Added delete_article, create_collection, list_admins; optimized search_articles response
 
 ## Features
@@ -26,8 +28,12 @@ Intercom MCP server for Help Center content management and CS workflow automatio
 ### Admin
 - ✅ `list_admins` - List workspace admins (useful for finding valid author_id)
 
+### Conversations
+- ✅ `search_conversations` - Search conversations (slim list: id/state/contact/timestamps, no parts)
+- ✅ `get_conversation` - Get one conversation with message history (slim: meaningful parts only — comment/note/quick_reply — system events filtered out)
+
 ### CS Workflow
-- ✅ `reply_conversation` - Reply to a conversation as an admin
+- ✅ `reply_conversation` - Reply to a conversation as an admin (returns slim confirmation)
 - ✅ `add_conversation_note` - Add an internal note to a conversation
 - ✅ `close_conversation` - Close a conversation
 - ✅ `update_ticket_state` - Update a ticket's state
