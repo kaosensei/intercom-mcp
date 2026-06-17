@@ -4,6 +4,8 @@ Intercom MCP server for Help Center content management and CS workflow automatio
 
 ## Version
 
+**v0.8.3** - `get_conversation` no longer drops message-bearing `open` parts (customer email replies that reopen a closed conversation) or `assignment` parts (the first admin reply); also surfaces per-part `attachments` and lifts ticket-form content into explicit `ticket.title` / `ticket.description` — fixes triage missing the latest customer message or screenshots
+
 **v0.8.2** - `get_conversation` keeps triage essentials (source/delivered_as, ticket-form attributes, contacts, per-part `from_quick_reply` flag) instead of stripping them — needed to tell "typed a reply" from "tapped a quick-reply button"
 
 **v0.8.1** - Fix: `search_conversations` accepts the `query` even when the MCP client serializes the object as a JSON string (Intercom rejected the stringified form)
@@ -34,7 +36,7 @@ Intercom MCP server for Help Center content management and CS workflow automatio
 
 ### Conversations
 - ✅ `search_conversations` - Search conversations (slim list: id/state/contact/timestamps, no parts)
-- ✅ `get_conversation` - Get one conversation with message history (slim: meaningful parts only — comment/note/quick_reply — system events filtered out)
+- ✅ `get_conversation` - Get one conversation with message history (slim: keeps comment/note/quick_reply plus any message-bearing open/assignment part + attachments; pure system events filtered out)
 
 ### CS Workflow
 - ✅ `reply_conversation` - Reply to a conversation as an admin (returns slim confirmation)
@@ -572,7 +574,7 @@ Search conversations with an Intercom query object. Returns a **slim** list (no 
 
 ### `get_conversation`
 
-Get a single conversation with message history, **slimmed** for triage: system-event parts filtered out, essentials kept.
+Get a single conversation with message history, **slimmed** for triage: pure system-event parts filtered out, but every message-bearing part (including reopen email replies and the first admin reply) and its attachments kept.
 
 **Parameters:**
 - `id` (string, required): Conversation ID
@@ -587,10 +589,11 @@ Get a single conversation with message history, **slimmed** for triage: system-e
 **Response includes:**
 - Top level: `id`, `state`, `open`, `title`, timestamps, `waiting_since`
 - `source`: incl. `delivered_as` (identifies the real asker), `subject`, `body`, `author`
-- `ticket_attributes`: ticket-form custom attributes with non-empty values (the real request often lives here)
+- `ticket`: ticket-form essentials — `type`, `state`, and `title` / `description` (the real request, pulled out of the internal `_default_title_` / `_default_description_` keys; present only when the ticket has them)
+- `ticket_attributes`: all ticket-form custom attributes with non-empty values
 - `contacts`: contact references
 - `total_parts` / `included_parts`: counts before / after filtering
-- `parts`: only `comment` / `note` / `quick_reply`, each `{ part_type, body, author, from_quick_reply, created_at }` (`from_quick_reply` distinguishes a typed reply from a tapped quick-reply option)
+- `parts`: `comment` / `note` / `quick_reply`, **plus** any `open` / `assignment` part that carries a real body or attachments (reopen email replies, the first admin reply). Each `{ part_type, body, author, from_quick_reply, attachments, created_at }` — `from_quick_reply` distinguishes a typed reply from a tapped quick-reply option; `attachments` (when present) lists `{ name, url, content_type }`
 
 ### `reply_conversation`
 
@@ -728,6 +731,7 @@ intercom-mcp/
 - ✅ Search conversations — slim list (v0.8.0)
 - ✅ Get conversation — slim, triage-aware (system events filtered, `from_quick_reply` flag) (v0.8.0)
 - ✅ Slim action-tool responses to protect client context (v0.8.0)
+- ✅ Get conversation — keep reopen/assignment message parts + attachments, surface ticket title/description (v0.8.3)
 
 ### Planned
 - 🔜 Batch operations
