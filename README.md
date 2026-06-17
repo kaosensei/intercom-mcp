@@ -4,6 +4,8 @@ Intercom MCP server for Help Center content management and CS workflow automatio
 
 ## Version
 
+**v0.8.4** - Internal cleanup: removed the unused `zod` dependency; extracted shared `ok()` (tool-result wrapper) and `clamp()` (pagination) helpers to cut ~140 lines of repetition; dropped four decorative pass-through interfaces. No tool, schema, or output changes.
+
 **v0.8.3** - `get_conversation` no longer drops message-bearing `open` parts (customer email replies that reopen a closed conversation) or `assignment` parts (the first admin reply); also surfaces per-part `attachments` and lifts ticket-form content into explicit `ticket.title` / `ticket.description` — fixes triage missing the latest customer message or screenshots
 
 **v0.8.2** - `get_conversation` keeps triage essentials (source/delivered_as, ticket-form attributes, contacts, per-part `from_quick_reply` flag) instead of stripping them — needed to tell "typed a reply" from "tapped a quick-reply button"
