@@ -146,9 +146,27 @@ async function callIntercomAPI(
 
 // ---- 回傳精簡 helpers：避免把整個 Intercom 物件灌進 tool result ----
 
-// 對話內容只保留這些 part_type，其餘為系統事件噪音
-// （assignment / open / close / language_detection_details / fin_* / operator_workflow_event / user_became_idle 等）
+// 對話內容預設保留這些 part_type，其餘多為系統事件噪音
+// （close / language_detection_details / fin_* / operator_workflow_event / user_became_idle 等）
+// ⚠️ 例外：part_type 'open'（客戶回信 reopen）與 'assignment'（首則真人回覆）雖非 comment，
+//    卻常帶最新且關鍵的客訴內容/截圖，需透過 isMessageBearingPart 額外保留——否則 triage 會漏讀最新對話
 const MEANINGFUL_PART_TYPES = new Set(['comment', 'note', 'quick_reply']);
+
+// 非 comment 類型但帶真實 body 或附件的 user/admin 訊息也要保留
+// （reopen 客戶回信是 'open'、首則真人回覆常是 'assignment'，皆含真實內容而非系統噪音）
+function isMessageBearingPart(p: any): boolean {
+  const authorType = p?.author?.type;
+  if (authorType !== 'user' && authorType !== 'admin') return false;
+  const hasBody = typeof p?.body === 'string' && p.body.trim() !== '';
+  const hasAttachments = Array.isArray(p?.attachments) && p.attachments.length > 0;
+  return hasBody || hasAttachments;
+}
+
+// 只保留附件關鍵欄位（名稱 / URL / 類型），讓 cs 看得到截圖連結
+function simplifyAttachments(attachments: any): any[] | undefined {
+  if (!Array.isArray(attachments) || attachments.length === 0) return undefined;
+  return attachments.map((a: any) => ({ name: a?.name, url: a?.url, content_type: a?.content_type }));
+}
 
 function simplifyAuthor(author: any) {
   if (!author) return undefined;
@@ -184,16 +202,31 @@ function simplifyConversationListItem(conv: any) {
   };
 }
 
-// 只保留有值的 ticket custom attributes（每個 value 是 {value,type}；空欄位濾掉）
+// 只保留有值的 ticket custom attributes（每個 value 是 {value,type}；空欄位/空陣列濾掉）
 function simplifyTicketAttributes(ticket: any) {
   const attrs = ticket?.custom_attributes;
   if (!attrs || typeof attrs !== 'object') return undefined;
   const kept: any = {};
   for (const [k, v] of Object.entries(attrs)) {
     const val = (v as any)?.value;
-    if (val !== null && val !== undefined && val !== '') kept[k] = val;
+    if (val === null || val === undefined || val === '') continue;
+    if (Array.isArray(val) && val.length === 0) continue;
+    kept[k] = val;
   }
   return Object.keys(kept).length ? kept : undefined;
+}
+
+// 把 ticket form 的標題/內文提升為明確欄位——這兩個值藏在 _default_title_ / _default_description_
+// 內部 key 底下，卻是 cs 判斷真實需求的關鍵（對話 title 常為 null、source.body 只有按鈕字如「Bug 通報」）
+function simplifyTicket(ticket: any) {
+  if (!ticket || typeof ticket !== 'object') return undefined;
+  const ca = ticket.custom_attributes || {};
+  const title = ca._default_title_?.value;
+  const description = ca._default_description_?.value;
+  const out: any = { type: ticket.ticket_type, state: ticket.state };
+  if (title) out.title = title;
+  if (description) out.description = description;
+  return out;
 }
 
 // get_conversation——濾掉系統事件 parts，但保留 cs 分類所需的頂層欄位
@@ -201,7 +234,8 @@ function simplifyTicketAttributes(ticket: any) {
 function simplifyConversationFull(data: any) {
   const allParts: any[] = data?.conversation_parts?.conversation_parts ?? [];
   const parts = allParts
-    .filter((p: any) => MEANINGFUL_PART_TYPES.has(p?.part_type))
+    // meaningful 類型，或任何帶 body/附件的 user/admin 訊息（reopen 回信、首則真人回覆）
+    .filter((p: any) => MEANINGFUL_PART_TYPES.has(p?.part_type) || isMessageBearingPart(p))
     .map((p: any) => ({
       id: p.id,
       part_type: p.part_type,
@@ -209,6 +243,7 @@ function simplifyConversationFull(data: any) {
       author: simplifyAuthor(p.author),
       // 區分「自行打字」vs「點 quick reply 選項」——cs 分類 🔵🔴 的關鍵
       from_quick_reply: !!(p.metadata && p.metadata.quick_reply_option_uuid),
+      attachments: simplifyAttachments(p.attachments),
       created_at: p.created_at
     }));
   const s = data?.source;
@@ -227,6 +262,7 @@ function simplifyConversationFull(data: any) {
       body: s.body,
       author: simplifyAuthor(s.author)
     } : undefined,
+    ticket: simplifyTicket(data?.ticket),
     ticket_attributes: simplifyTicketAttributes(data?.ticket),
     contacts: (data?.contacts?.contacts ?? []).map((c: any) => ({
       type: c.type, id: c.id, external_id: c.external_id, email: c.email, name: c.name
@@ -293,7 +329,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'get_conversation',
-        description: 'Get a single Intercom conversation by ID. SLIM: keeps triage essentials (source incl. delivered_as, ticket_attributes from ticket forms, contacts) and only meaningful parts (comment/note/quick_reply, each flagged with from_quick_reply) — system events filtered out, with total_parts/included_parts counts.',
+        description: 'Get a single Intercom conversation by ID. SLIM: keeps triage essentials — source (incl. delivered_as), ticket (type/state/title/description from ticket forms) + ticket_attributes (custom fields), contacts — and message-bearing parts: comment/note/quick_reply PLUS any open/assignment part carrying a real body or attachments (reopen email replies, first admin reply), each flagged with from_quick_reply and including attachments. Pure system events filtered out, with total_parts/included_parts counts.',
         inputSchema: {
           type: 'object',
           properties: {
