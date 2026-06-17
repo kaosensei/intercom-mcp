@@ -4,46 +4,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.8.3';
-
-// Intercom Article 型別
-interface IntercomArticle {
-  id: string;
-  title: string;
-  description?: string;
-  body?: string;
-  author_id: number;
-  state: 'draft' | 'published';
-  created_at: number;
-  updated_at: number;
-}
-
-// Intercom Collection 型別
-interface IntercomCollection {
-  id: string;
-  workspace_id: string;
-  name: string;
-  description?: string;
-  created_at: number;
-  updated_at: number;
-  url?: string;
-  icon?: string;
-  order?: number;
-  default_locale?: string;
-  translated_content?: any;
-}
-
-
-// List 回應型別
-interface ListArticlesResponse {
-  type: 'list';
-  data: IntercomArticle[];
-  pages?: {
-    page: number;
-    per_page: number;
-    total_pages: number;
-  };
-}
+const VERSION = '0.8.4';
 
 // Search Articles 回應型別
 interface SearchArticlesResponse {
@@ -90,17 +51,6 @@ interface IntercomAdmin {
   has_inbox_seat?: boolean;
   team_ids?: number[];
 }
-
-interface ListCollectionsResponse {
-  type: 'list';
-  data: IntercomCollection[];
-  pages?: {
-    page: number;
-    per_page: number;
-    total_pages: number;
-  };
-}
-
 
 // 從環境變數取得 token
 const INTERCOM_TOKEN = process.env.INTERCOM_ACCESS_TOKEN;
@@ -285,6 +235,12 @@ function simplifyArticleResult(a: any) {
     updated_at: a?.updated_at
   };
 }
+
+// 統一 tool result 包裝——把物件序列化成 MCP text content
+const ok = (x: any) => ({ content: [{ type: 'text', text: JSON.stringify(x, null, 2) }] });
+
+// 夾住數值到 [min, max] 並取整（分頁 per_page 用）
+const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, Math.floor(n)));
 
 /**
  * 建立 MCP Server
@@ -777,12 +733,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const article = await callIntercomAPI(`/articles/${id}`);
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(article, null, 2)
-        }]
-      };
+      return ok(article);
     }
 
     if (name === 'list_articles') {
@@ -793,18 +744,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // 確保參數在合理範圍內
       const validPage = Math.max(1, Math.floor(page));
-      const validPerPage = Math.min(50, Math.max(1, Math.floor(per_page)));
+      const validPerPage = clamp(per_page, 1, 50);
 
-      const data: ListArticlesResponse = await callIntercomAPI(
+      const data = await callIntercomAPI(
         `/articles?page=${validPage}&per_page=${validPerPage}`
       );
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(data, null, 2)
-        }]
-      };
+      return ok(data);
     }
 
     if (name === 'create_article') {
@@ -847,12 +793,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const article = await callIntercomAPI('/articles', 'POST', payload);
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(simplifyArticleResult(article), null, 2)
-        }]
-      };
+      return ok(simplifyArticleResult(article));
     }
 
     if (name === 'update_article') {
@@ -895,12 +836,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const article = await callIntercomAPI(`/articles/${id}`, 'PUT', payload);
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(simplifyArticleResult(article), null, 2)
-        }]
-      };
+      return ok(simplifyArticleResult(article));
     }
 
     if (name === 'delete_article') {
@@ -913,12 +849,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const result = await callIntercomAPI(`/articles/${id}`, 'DELETE');
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(result, null, 2)
-        }]
-      };
+      return ok(result);
     }
 
     if (name === 'list_collections') {
@@ -929,18 +860,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // 確保參數在合理範圍內
       const validPage = Math.max(1, Math.floor(page));
-      const validPerPage = Math.min(150, Math.max(1, Math.floor(per_page)));
+      const validPerPage = clamp(per_page, 1, 150);
 
-      const data: ListCollectionsResponse = await callIntercomAPI(
+      const data = await callIntercomAPI(
         `/help_center/collections?page=${validPage}&per_page=${validPerPage}`
       );
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(data, null, 2)
-        }]
-      };
+      return ok(data);
     }
 
     if (name === 'get_collection') {
@@ -952,12 +878,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const collection = await callIntercomAPI(`/help_center/collections/${id}`);
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(collection, null, 2)
-        }]
-      };
+      return ok(collection);
     }
 
     if (name === 'create_collection') {
@@ -989,12 +910,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const collection = await callIntercomAPI('/help_center/collections', 'POST', payload);
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(collection, null, 2)
-        }]
-      };
+      return ok(collection);
     }
 
     if (name === 'update_collection') {
@@ -1031,12 +947,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const collection = await callIntercomAPI(`/help_center/collections/${id}`, 'PUT', payload);
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(collection, null, 2)
-        }]
-      };
+      return ok(collection);
     }
 
     if (name === 'delete_collection') {
@@ -1049,16 +960,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const result = await callIntercomAPI(`/help_center/collections/${id}`, 'DELETE');
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            success: true,
-            message: `Collection ${id} has been deleted successfully`,
-            ...result
-          }, null, 2)
-        }]
-      };
+      return ok({
+        success: true,
+        message: `Collection ${id} has been deleted successfully`,
+        ...result
+      });
     }
 
     if (name === 'search_articles') {
@@ -1102,12 +1008,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         })),
       };
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(summary, null, 2)
-        }]
-      };
+      return ok(summary);
     }
 
     if (name === 'search_conversations') {
@@ -1129,21 +1030,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       }
 
-      const pagination: any = { per_page: Math.min(50, Math.max(1, Math.floor(per_page))) };
+      const pagination: any = { per_page: clamp(per_page, 1, 50) };
       if (starting_after) pagination.starting_after = starting_after;
 
       const result = await callIntercomAPI('/conversations/search', 'POST', { query: q, pagination });
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            total_count: result.total_count,
-            next: result.pages?.next?.starting_after,
-            conversations: (result.conversations ?? []).map(simplifyConversationListItem)
-          }, null, 2)
-        }]
-      };
+      return ok({
+        total_count: result.total_count,
+        next: result.pages?.next?.starting_after,
+        conversations: (result.conversations ?? []).map(simplifyConversationListItem)
+      });
     }
 
     if (name === 'get_conversation') {
@@ -1152,12 +1048,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const result = await callIntercomAPI(`/conversations/${id}?display_as=plaintext`);
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(simplifyConversationFull(result), null, 2)
-        }]
-      };
+      return ok(simplifyConversationFull(result));
     }
 
     if (name === 'reply_conversation') {
@@ -1183,12 +1074,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         body
       });
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(simplifyWriteResult(result), null, 2)
-        }]
-      };
+      return ok(simplifyWriteResult(result));
     }
 
     if (name === 'add_conversation_note') {
@@ -1214,12 +1100,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         body
       });
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(simplifyWriteResult(result), null, 2)
-        }]
-      };
+      return ok(simplifyWriteResult(result));
     }
 
     if (name === 'close_conversation') {
@@ -1240,12 +1121,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         admin_id: resolvedAdminId
       });
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(simplifyWriteResult(result), null, 2)
-        }]
-      };
+      return ok(simplifyWriteResult(result));
     }
 
     if (name === 'update_ticket_state') {
@@ -1260,12 +1136,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const result = await callIntercomAPI(`/tickets/${ticket_id}`, 'PUT', { state });
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(simplifyWriteResult(result), null, 2)
-        }]
-      };
+      return ok(simplifyWriteResult(result));
     }
 
     if (name === 'list_admins') {
@@ -1281,15 +1152,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         team_ids: admin.team_ids
       }));
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            type: 'admin.list',
-            admins
-          }, null, 2)
-        }]
-      };
+      return ok({
+        type: 'admin.list',
+        admins
+      });
     }
 
     throw new Error(`Unknown tool: ${name}`);
@@ -1323,12 +1189,7 @@ async function main() {
   // 使用 stderr 輸出（stdio 協定使用 stdout）
   console.error(`Intercom MCP Server v${VERSION}`);
   console.error('Running on stdio transport');
-  console.error('Tools available:');
-  console.error('  Articles: get_article, list_articles, create_article, update_article, delete_article, search_articles');
-  console.error('  Collections: list_collections, get_collection, create_collection, update_collection, delete_collection');
-  console.error('  Conversations: search_conversations, get_conversation');
-  console.error('  CS Tools: reply_conversation, add_conversation_note, close_conversation, update_ticket_state');
-  console.error('  Admin: list_admins');
+  console.error('Tools: Articles, Collections, Conversations, CS, Admin — see ListTools for the full list');
 }
 
 // 啟動伺服器
