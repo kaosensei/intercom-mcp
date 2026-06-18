@@ -4,7 +4,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.8.4';
+const VERSION = '0.9.0';
 
 // Search Articles 回應型別
 interface SearchArticlesResponse {
@@ -92,6 +92,24 @@ async function callIntercomAPI(
   }
 
   return response.json();
+}
+
+// 小睡，用於 contact 建立後傳播延遲的 404 retry backoff
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// 用 email 找 contact，找不到就建一個 lead；回傳 { id, role }（role 供 messages API 的 to.type 用）
+async function resolveOrCreateContact(email: string): Promise<{ id: string; role: string }> {
+  const search = await callIntercomAPI('/contacts/search', 'POST', {
+    query: { field: 'email', operator: '=', value: email }
+  });
+  const found = Array.isArray(search?.data) ? search.data : [];
+  // 偏好已是 user 的 contact（同一 email 可能同時存在 user + lead）
+  const picked = found.find((c: any) => c?.role === 'user') || found[0];
+  if (picked?.id) {
+    return { id: picked.id, role: picked.role || 'lead' };
+  }
+  const created = await callIntercomAPI('/contacts', 'POST', { role: 'lead', email });
+  return { id: created.id, role: created.role || 'lead' };
 }
 
 // ---- 回傳精簡 helpers：避免把整個 Intercom 物件灌進 tool result ----
@@ -651,6 +669,37 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         }
       },
       {
+        name: 'send_outbound_email',
+        description: 'Send a NEW outbound email to a contact (by email address) as an admin — i.e. START a fresh conversation, not reply to an existing one. Resolves the email to an Intercom contact (creating a lead if none exists), then sends. Returns the new conversation_id. Use reply_conversation instead when responding within an existing conversation.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            email: {
+              type: 'string',
+              description: "Recipient's email address (required). Resolved to an Intercom contact; a lead is created if none exists."
+            },
+            subject: {
+              type: 'string',
+              description: 'Email subject (required).'
+            },
+            body: {
+              type: 'string',
+              description: 'Email body (required). Supports HTML.'
+            },
+            admin_id: {
+              type: 'string',
+              description: 'Admin ID to send as (optional, defaults to INTERCOM_ADMIN_ID env var). Determines the sender name/address the recipient sees.'
+            },
+            template: {
+              type: 'string',
+              enum: ['plain', 'personal'],
+              description: "Email style (optional, defaults to 'personal' = 1:1 personal-email look)."
+            }
+          },
+          required: ['email', 'subject', 'body']
+        }
+      },
+      {
         name: 'add_conversation_note',
         description: 'Add an internal note to an Intercom conversation. Notes are only visible to team members, not customers.',
         inputSchema: {
@@ -1075,6 +1124,65 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
 
       return ok(simplifyWriteResult(result));
+    }
+
+    if (name === 'send_outbound_email') {
+      const { email, subject, body, admin_id, template } = args as {
+        email: string;
+        subject: string;
+        body: string;
+        admin_id?: string;
+        template?: string;
+      };
+
+      if (!email || !subject || !body) {
+        throw new Error('email, subject and body are required');
+      }
+
+      const resolvedAdminId = admin_id || INTERCOM_ADMIN_ID;
+      if (!resolvedAdminId) {
+        throw new Error('admin_id is required. Set INTERCOM_ADMIN_ID env var or pass admin_id parameter.');
+      }
+
+      const contact = await resolveOrCreateContact(email);
+
+      const payload = {
+        message_type: 'email',
+        subject,
+        body,
+        template: template || 'personal',
+        from: { type: 'admin', id: Number(resolvedAdminId) },
+        to: { type: contact.role, id: contact.id }
+      };
+
+      // 新建 contact 後 Intercom 可能有傳播延遲 → 對 404 做 backoff 重試（最多 3 次）
+      let result: any;
+      let lastErr: any;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          result = await callIntercomAPI('/messages', 'POST', payload);
+          lastErr = undefined;
+          break;
+        } catch (err: any) {
+          lastErr = err;
+          if (String(err?.message || '').includes('404')) {
+            await sleep(1000 * (attempt + 1));
+            continue;
+          }
+          throw err;
+        }
+      }
+      if (lastErr) throw lastErr;
+
+      return ok({
+        id: result?.id,
+        conversation_id: result?.conversation_id,
+        message_type: result?.message_type,
+        subject: result?.subject,
+        to_contact_id: contact.id,
+        to_role: contact.role,
+        created_at: result?.created_at
+      });
     }
 
     if (name === 'add_conversation_note') {
