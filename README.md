@@ -4,6 +4,8 @@ Intercom MCP server for Help Center content management and CS workflow automatio
 
 ## Version
 
+**v0.9.0** - Added `send_outbound_email` — start a NEW outbound email to a contact by email address (resolves/creates the contact, retries on the post-create 404 propagation delay). Complements `reply_conversation`, which only replies within an existing conversation.
+
 **v0.8.4** - Internal cleanup: removed the unused `zod` dependency; extracted shared `ok()` (tool-result wrapper) and `clamp()` (pagination) helpers to cut ~140 lines of repetition; dropped four decorative pass-through interfaces. No tool, schema, or output changes.
 
 **v0.8.3** - `get_conversation` no longer drops message-bearing `open` parts (customer email replies that reopen a closed conversation) or `assignment` parts (the first admin reply); also surfaces per-part `attachments` and lifts ticket-form content into explicit `ticket.title` / `ticket.description` — fixes triage missing the latest customer message or screenshots
@@ -42,6 +44,7 @@ Intercom MCP server for Help Center content management and CS workflow automatio
 
 ### CS Workflow
 - ✅ `reply_conversation` - Reply to a conversation as an admin (returns slim confirmation)
+- ✅ `send_outbound_email` - Start a NEW outbound email to a contact by email address (resolves/creates contact, returns new conversation_id)
 - ✅ `add_conversation_note` - Add an internal note to a conversation
 - ✅ `close_conversation` - Close a conversation
 - ✅ `update_ticket_state` - Update a ticket's state
@@ -77,7 +80,7 @@ npm run build
 | Variable | Required | Description |
 |---|---|---|
 | `INTERCOM_ACCESS_TOKEN` | ✅ Always | Your Intercom API access token |
-| `INTERCOM_ADMIN_ID` | ✅ For CS tools | Admin ID used for `reply_conversation` and `add_conversation_note` when `admin_id` parameter is not provided |
+| `INTERCOM_ADMIN_ID` | ✅ For CS tools | Admin ID used for `reply_conversation`, `add_conversation_note` and `send_outbound_email` when `admin_id` parameter is not provided |
 
 ### Configure with Claude Code (Recommended)
 
@@ -613,6 +616,31 @@ Reply to a conversation as an admin. The reply is visible to the customer. Retur
   "body": "<p>Thank you for reaching out. We'll look into this right away.</p>"
 }
 ```
+
+### `send_outbound_email`
+
+Start a **new** outbound email to a contact identified by email address — not a reply to an existing conversation. The tool resolves the email to an Intercom contact (creating a `lead` if none exists), then sends via the Messages API. Because a freshly-created contact can briefly return 404 on send, the call retries with backoff. Returns the new `conversation_id` so you can note/track it.
+
+Use `reply_conversation` instead when responding inside an existing conversation.
+
+**Parameters:**
+- `email` (string, required): Recipient's email address
+- `subject` (string, required): Email subject
+- `body` (string, required): Email body (supports HTML)
+- `admin_id` (string, optional): Admin ID to send as (defaults to `INTERCOM_ADMIN_ID` env var). Determines the sender name/address the recipient sees.
+- `template` (string, optional): `plain` or `personal` (defaults to `personal` — a 1:1 personal-email look)
+
+**Example:**
+```json
+{
+  "email": "member@example.com",
+  "subject": "About your subscription",
+  "body": "<p>Hello, ...</p>",
+  "admin_id": "8530422"
+}
+```
+
+**Note:** the Messages API requires `to.id` to be an Intercom contact id, never a raw email — this tool handles the lookup/creation for you.
 
 ### `add_conversation_note`
 
